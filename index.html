@@ -170,7 +170,8 @@ fetch('pets.json?t=' + Date.now(), { cache: 'no-store' })
       const box = document.createElement('div');
       box.className = 'pet';
       const img = document.createElement('img');
-      img.src = 'pets/' + name;
+      // 파일 이름에 한글이나 공백이 있으면 그대로는 못 찾습니다. 주소용으로 바꿔서 넣습니다
+      img.src = 'pets/' + encodeURIComponent(name);
       img.alt = name;
       // 목록에는 있는데 파일이 없으면 깨진 그림 대신 그 자리만 조용히 비웁니다
       img.onerror = () => { box.style.visibility = 'hidden'; };
