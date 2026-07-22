@@ -1,0 +1,184 @@
+<!doctype html>
+<html lang="ko">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width,initial-scale=1">
+<title>두락스 알람</title>
+<style>
+/* ── 색을 바꾸고 싶으면 아래 줄만 고치면 됩니다 ── */
+:root{ --bg:#0d1117; --ink:#e6edf3; --accent:#2f81f7; --dim:#8b949e; --warn:#f0883e; }
+
+*{box-sizing:border-box;margin:0;padding:0}
+body{background:var(--bg);color:var(--ink);min-height:100vh;
+  display:flex;flex-direction:column;align-items:center;justify-content:flex-start;gap:20px;padding:36px 24px;
+  font-family:-apple-system,'Apple SD Gothic Neo','Malgun Gothic',sans-serif}
+
+/* ── 현재 시각 ── */
+#clock{font-size:72px;font-weight:800;letter-spacing:2px;font-variant-numeric:tabular-nums}
+#clock.ring{color:var(--warn)}
+
+.row{display:flex;gap:10px;flex-wrap:wrap;justify-content:center;align-items:center}
+
+input[type=time]{background:#161b22;color:var(--ink);border:1px solid #30363d;border-radius:9px;
+  padding:10px 14px;font-size:18px;font-family:inherit}
+button{background:#21262d;color:var(--ink);border:1px solid #30363d;border-radius:9px;
+  padding:12px 20px;font-size:16px;cursor:pointer;font-family:inherit}
+button:hover{border-color:var(--accent)}
+button.go{background:var(--accent);border-color:var(--accent);font-weight:700}
+button.stop{background:var(--warn);border-color:var(--warn);font-weight:700;color:#0d1117}
+button:disabled{opacity:.4;cursor:default}
+
+/* ── 설정된 알람 목록 (알약 모양) ── */
+#alarmList{display:flex;gap:8px;flex-wrap:wrap;justify-content:center;min-height:22px}
+.chip{display:flex;align-items:center;gap:8px;background:#161b22;border:1px solid #30363d;
+  border-radius:999px;padding:6px 6px 6px 14px;font-size:15px;font-variant-numeric:tabular-nums}
+.chip button{padding:3px 10px;font-size:13px;border-radius:999px}
+
+/* ── 펫 벽 ─────────────────────────────
+   pets.json 에 적힌 파일 이름을 pets/ 폴더에서 찾아
+   여기에 하나씩 그립니다. 이 목록만 늘어나면 벽도 늘어납니다. ── */
+#wall{display:flex;gap:14px;flex-wrap:wrap;justify-content:center;max-width:860px;padding:6px}
+.pet{width:96px;height:96px;border-radius:16px;overflow:hidden;background:#161b22;
+  border:1px solid #30363d;display:flex;align-items:center;justify-content:center;flex-shrink:0}
+.pet img{width:100%;height:100%;object-fit:cover;display:block}
+/* 알람이 울리면 이 클래스가 모든 펫에 붙습니다 */
+.pet.wak img{animation:wak .5s ease-in-out infinite}
+@keyframes wak{
+  0%,100%{transform:scale(1)      rotate(0deg)}
+  20%    {transform:scale(1.14)   rotate(-9deg)}
+  40%    {transform:scale(1.05)   rotate(8deg)}
+  60%    {transform:scale(1.14)   rotate(-6deg)}
+  80%    {transform:scale(1.05)   rotate(6deg)}
+}
+
+.hint{color:var(--dim);font-size:14px;text-align:center;line-height:1.7;max-width:520px}
+</style>
+</head>
+<body>
+  <div id="clock">00:00:00</div>
+
+  <div class="row">
+    <input type="time" id="alarmInput">
+    <button class="go" onclick="addAlarm()">알람 추가</button>
+  </div>
+  <div id="alarmList"></div>
+
+  <div id="wall"></div>
+
+  <button class="stop" id="offBtn" onclick="turnOff()" disabled>알람 끄기</button>
+
+  <p class="hint">설정한 시각이 되면 벽에 있는 펫들이 다 같이 반응하고 소리가 납니다<br>
+  알람을 하나 이상 추가해야 소리가 켜집니다 (브라우저가 그렇게 정해뒀습니다)</p>
+
+<script>
+// ── 상태 ──
+let alarms = [];       // [{time:'07:32', firedAt:null}] 형태로 쌓입니다
+let ac = null;          // AudioContext. 버튼을 눌러야 그때 열립니다
+let ringing = false;
+let beepTimer = null;
+
+const $clock = document.getElementById('clock');
+const $list  = document.getElementById('alarmList');
+const $wall  = document.getElementById('wall');
+const $off   = document.getElementById('offBtn');
+const $input = document.getElementById('alarmInput');
+
+// ── 시계: 1초마다 현재 시각을 그리고, 알람 시각과 같은지 확인합니다 ──
+function two(n){ return String(n).padStart(2, '0'); }
+function tick(){
+  const now = new Date();
+  const hh = two(now.getHours()), mm = two(now.getMinutes()), ss = two(now.getSeconds());
+  $clock.textContent = hh + ':' + mm + ':' + ss;
+  checkAlarms(hh + ':' + mm);
+}
+setInterval(tick, 1000);
+tick();
+
+// ── 알람 추가/삭제 ──
+function addAlarm(){
+  const v = $input.value;   // "07:32" 형식 문자열
+  if (!v) return;
+  if (!ac) ac = new (window.AudioContext || window.webkitAudioContext)();  // 소리는 여기, 버튼 클릭 안에서 켭니다
+  if (!alarms.some(a => a.time === v)) alarms.push({ time: v, firedAt: null });
+  drawList();
+}
+function removeAlarm(v){
+  alarms = alarms.filter(a => a.time !== v);
+  drawList();
+}
+function drawList(){
+  $list.innerHTML = '';
+  alarms.forEach(a => {
+    const chip = document.createElement('div');
+    chip.className = 'chip';
+    chip.append(a.time + ' ');
+    const x = document.createElement('button');
+    x.textContent = '삭제';
+    x.onclick = () => removeAlarm(a.time);
+    chip.appendChild(x);
+    $list.appendChild(chip);
+  });
+}
+
+// ── 알람이 울릴 시각인지 확인 ──
+function checkAlarms(hhmm){
+  if (ringing) return;
+  for (const a of alarms) {
+    if (a.time === hhmm && a.firedAt !== hhmm) {
+      a.firedAt = hhmm;   // 같은 1분 안에 다시 울리지 않도록 표시
+      ring();
+      break;
+    }
+  }
+}
+function ring(){
+  ringing = true;
+  $clock.classList.add('ring');
+  $off.disabled = false;
+  document.querySelectorAll('.pet').forEach(p => p.classList.add('wak'));
+  beep();
+  beepTimer = setInterval(beep, 900);
+}
+function turnOff(){
+  ringing = false;
+  $clock.classList.remove('ring');
+  $off.disabled = true;
+  document.querySelectorAll('.pet').forEach(p => p.classList.remove('wak'));
+  clearInterval(beepTimer);
+  beepTimer = null;
+}
+
+// 소리 파일 없이 그 자리에서 소리를 만듭니다 (OscillatorNode)
+function beep(){
+  if (!ac) return;
+  [0, 0.18, 0.36].forEach(d => {
+    const o = ac.createOscillator(), g = ac.createGain();
+    o.connect(g); g.connect(ac.destination);
+    o.frequency.value = 880; o.type = 'sine';
+    g.gain.setValueAtTime(0.001, ac.currentTime + d);
+    g.gain.exponentialRampToValueAtTime(0.28, ac.currentTime + d + 0.02);
+    g.gain.exponentialRampToValueAtTime(0.001, ac.currentTime + d + 0.16);
+    o.start(ac.currentTime + d); o.stop(ac.currentTime + d + 0.18);
+  });
+}
+
+// ── 펫 벽: pets.json 목록을 읽어서 pets/ 폴더의 그림을 하나씩 붙입니다 ──
+fetch('pets.json?t=' + Date.now(), { cache: 'no-store' })
+  .then(r => r.json())
+  .then(list => {
+    list.forEach(name => {
+      const box = document.createElement('div');
+      box.className = 'pet';
+      const img = document.createElement('img');
+      img.src = 'pets/' + name;
+      img.alt = name;
+      // 목록에는 있는데 파일이 없으면 깨진 그림 대신 그 자리만 조용히 비웁니다
+      img.onerror = () => { box.style.visibility = 'hidden'; };
+      box.appendChild(img);
+      $wall.appendChild(box);
+    });
+  })
+  .catch(() => { /* pets.json을 못 읽어도 시계와 알람은 그대로 동작합니다 */ });
+</script>
+</body>
+</html>
